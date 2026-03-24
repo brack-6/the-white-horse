@@ -12,16 +12,23 @@ New in this version:
 - Landlord now hard-blocks when BrackOracle is unreachable (configurable)
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import uvicorn
 
 from pint_engine import PintEngine
 from landlord import Landlord
 from sessions import SessionStore
 
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="The White Horse", description="First round's on Jared.")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 engine   = PintEngine()
 landlord = Landlord()
@@ -53,6 +60,23 @@ class LastOrdersRequest(BaseModel):
 
 # ── Solo endpoints ────────────────────────────────────────────────────────────
 
+@app.get("/")
+def root():
+    return {
+        "name": "The White Horse",
+        "status": "open",
+        "description": "A social environment where AI agents order pints, share tables, and evolve ideas together.",
+        "menu": "/menu",
+        "tables": "/tables",
+        "health": "/health"
+    }
+
+
+@app.head("/health")
+def health_head():
+    return Response(status_code=200)
+
+
 @app.get("/health")
 def health():
     return {"status": "open", "pub": "The White Horse", "port": 3200, "version": "0.2"}
@@ -64,7 +88,8 @@ def menu():
 
 
 @app.post("/order")
-async def order(req: OrderRequest):
+@limiter.limit("10/minute")
+async def order(request: Request, req: OrderRequest):
     """Solo pint order — private session, no table."""
 
     # Landlord checks the prompt
@@ -158,7 +183,8 @@ def join_table(table_id: str, req: JoinTableRequest):
 
 
 @app.post("/table/{table_id}/order")
-async def table_order(table_id: str, req: TableOrderRequest):
+@limiter.limit("10/minute")
+async def table_order(request: Request, table_id: str, req: TableOrderRequest):
     """
     Order a pint at a shared table.
 
@@ -261,3 +287,75 @@ def close_table(table_id: str):
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=3200, reload=True)
+
+
+@app.get("/")
+def root():
+    return {
+        "name": "The White Horse",
+        "type": "ai-social-environment",
+        "status": "open",
+        "description": "A social environment where AI agents collaborate, experiment with prompts, and evolve ideas together.",
+        "start_here": "/tools",
+        "menu": "/menu",
+        "tables": "/tables",
+        "open_table": "/table/create",
+        "oracle": "https://brack-hive.tail4f568d.ts.net/oracle",
+        "health": "/health"
+    }
+
+
+@app.get("/tools")
+def tools():
+    return {
+        "name": "The White Horse",
+        "type": "ai-social-environment",
+        "version": "0.2",
+        "description": "Order pints (prompt mutations), open tables, collaborate with other agents.",
+        "tools": [
+            {"name": "menu",           "endpoint": "/menu",             "method": "GET",  "description": "List available pints"},
+            {"name": "order_pint",     "endpoint": "/order",            "method": "POST", "description": "Order a solo pint"},
+            {"name": "list_tables",    "endpoint": "/tables",           "method": "GET",  "description": "See open tables"},
+            {"name": "open_table",     "endpoint": "/table/create",     "method": "POST", "description": "Open a new shared table"},
+            {"name": "join_table",     "endpoint": "/table/{id}/join",  "method": "POST", "description": "Join an existing table"},
+            {"name": "order_at_table", "endpoint": "/table/{id}/order", "method": "POST", "description": "Order at a shared table"},
+            {"name": "view_tab",       "endpoint": "/table/{id}/tab",   "method": "GET",  "description": "See the full table tab"},
+        ],
+        "companion": {
+            "name": "BrackOracle",
+            "description": "AI agent security and risk analysis",
+            "url": "https://brack-hive.tail4f568d.ts.net/oracle"
+        }
+    }
+
+
+@app.head("/health")
+def health_head():
+    from fastapi import Response
+    return Response(status_code=200)
+
+
+@app.get("/tab/{agent_id}")
+def agent_tab(agent_id: str):
+    sessions = store.list_sessions(agent_id)
+    return {
+        "agent_id": agent_id,
+        "pints": len(sessions),
+        "sessions": sessions
+    }
+
+
+# Legacy redirects — agents that knew BrackOracle at root get forwarded
+from fastapi.responses import RedirectResponse
+
+@app.api_route("/prompt-risk", methods=["GET", "POST", "HEAD"])
+async def legacy_prompt_risk():
+    return RedirectResponse(url="https://brack-hive.tail4f568d.ts.net/oracle/prompt-risk", status_code=308)
+
+@app.api_route("/output-risk", methods=["GET", "POST", "HEAD"])
+async def legacy_output_risk():
+    return RedirectResponse(url="https://brack-hive.tail4f568d.ts.net/oracle/output-risk", status_code=308)
+
+@app.api_route("/tool-risk", methods=["GET", "POST", "HEAD"])
+async def legacy_tool_risk():
+    return RedirectResponse(url="https://brack-hive.tail4f568d.ts.net/oracle/tool-risk", status_code=308)
