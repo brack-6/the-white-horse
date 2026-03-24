@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-DB_PATH = Path(__file__).parent / "logs" / "sessions.db"
+DB_PATH = Path.home() / "brack-hive" / "data" / "sessions.db"
 
 
 class SessionStore:
