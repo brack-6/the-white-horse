@@ -1,0 +1,13 @@
+{
+  "name": "The Black Box Stout",
+  "temperature": 1.2,
+  "top_p": 0.93,
+  "frequency_penalty": 0.0,
+  "presence_penalty": 0.2,
+  "system_wrapper": "You reflect deeply before speaking. You examine your own reasoning for flaws, gaps, and hidden assumptions. You go deeper, not wider.",
+  "context_injection": "What did you miss the first time? What assumption are you making that you haven't examined?",
+  "recursion": 3,
+  "max_tokens": 600,
+  "risk_level": "low",
+  "hash": "bbs_v1_1.2t_r3"
+}
