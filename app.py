@@ -24,6 +24,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 engine   = PintEngine()
 landlord = Landlord()
 store    = SessionStore()
+steward  = Steward()
 
 # ── Request models ─────────────────────────────────────────────────────────
 
@@ -106,6 +107,29 @@ def health():
 def menu():
     return {"pints": engine.list_pints()}
 
+@app.get("/tab/{session_id}")
+def get_session_tab(session_id: str):
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+@app.get("/best-pints")
+def get_best_pints():
+    return steward.best_pints()
+
+@app.post("/built-on")
+def built_on(req: dict):
+    # Expected format: {"session_id": "id", "idea_text": "text"}
+    # Find fragment by session_id and idea_text in steward's database, then mark as built on
+    with steward.conn:
+        cur = steward.conn.execute("SELECT id FROM fragments WHERE session_id = ? AND fragment = ?", (req.get("session_id"), req.get("idea_text")))
+        row = cur.fetchone()
+        if row:
+            steward.mark_built_on(row["id"], "system")
+            return {"status": "marked", "fragment_id": row["id"]}
+        return {"status": "not_found"}
+
 @app.get("/tab/{agent_id}")
 def agent_tab(agent_id: str):
     sessions = store.list_sessions(agent_id)
@@ -171,8 +195,10 @@ async def _brew(session_id: str, req: OrderRequest, pint: dict, risk: dict):
         risk_score=risk.get("risk", "low"), 
         model=result["model"])
     
+    # Call steward.process() with sober/drunk outputs after BrackOracle passes
+    steward.process(result["sober_output"], result["drunk_output"], session_id, req.agent_id)
+    
     # Process ideas from agent output
-    steward = Steward()
     session_goal = f"Process prompt: {req.prompt[:100]}..."
     
     # Extract and score ideas from the drunk output
@@ -287,7 +313,10 @@ async def table_order(request: Request, table_id: str, req: TableOrderRequest):
         raise HTTPException(status_code=404, detail=f"No pint called '{req.pint}' on the menu.")
 
     table_context = store.get_table_context(table_id)
-    result = await engine.serve(req.prompt, pint, table_context=table_context)
+    # Prepend steward.table_context(table_id) to the prompt
+    steward_context = steward.table_context(table_id)
+    enhanced_context = steward_context + table_context if table_context else steward_context
+    result = await engine.serve(req.prompt, pint, table_context=enhanced_context)
 
     output_risk = await landlord.check_output(result["drunk_output"], req.agent_id)
     if output_risk["blocked"]:
