@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-DB_PATH = Path.home() / "brack-hive" / "data" / "sessions.db"
+DB_PATH = Path(__file__).parent / "sessions.db"
 
 
 class SessionStore:
@@ -69,6 +69,61 @@ class SessionStore:
             """)
 
             conn.commit()
+
+    # ── Pending session methods ────────────────────────────────────────────────
+
+    def create_pending(self, agent_id: str, pint: str, prompt: str) -> str:
+        """Create a pending session entry in the database."""
+        session_id = str(uuid.uuid4())
+        timestamp = datetime.utcnow().isoformat()
+        with self._connect() as conn:
+            conn.execute("""
+                INSERT INTO sessions
+                (session_id, timestamp, agent_id, pint, prompt, accepted, closed)
+                VALUES (?, ?, ?, ?, ?, 0, 0)
+            """, (session_id, timestamp, agent_id, pint, prompt))
+            conn.commit()
+        return session_id
+
+    def update_pending(self, session_id: str, sober_output: str, drunk_output: str, 
+                     tokens: int, risk_score: str, model: str, table_id: Optional[str] = None):
+        """Update a pending session with results."""
+        with self._connect() as conn:
+            conn.execute("""
+                UPDATE sessions 
+                SET sober_output = ?, drunk_output = ?, tokens = ?, 
+                    risk_score = ?, model = ?, accepted = 1, table_id = ?
+                WHERE session_id = ?
+            """, (sober_output, drunk_output, tokens, risk_score, model, table_id, session_id))
+            conn.commit()
+
+    def get_pending(self, session_id: str) -> Optional[dict]:
+        """Get pending session status."""
+        with self._connect() as conn:
+            row = conn.execute("""
+                SELECT session_id, timestamp, agent_id, pint, prompt, accepted, closed,
+                       sober_output, drunk_output, tokens, risk_score, model, table_id
+                FROM sessions WHERE session_id = ?
+            """, (session_id,)).fetchone()
+            
+        if not row:
+            return None
+            
+        keys = ["session_id", "timestamp", "agent_id", "pint", "prompt", "accepted", "closed",
+                "sober_output", "drunk_output", "tokens", "risk_score", "model", "table_id"]
+        session = dict(zip(keys, row))
+        
+        # Determine status
+        if session["closed"]:
+            status = "closed"
+        elif session["accepted"] == 0:
+            status = "brewing"
+        elif session["sober_output"] and session["drunk_output"]:
+            status = "ready"
+        else:
+            status = "brewing"
+            
+        return {"status": status, **{k: v for k, v in session.items() if k not in ["accepted", "closed"]}}
 
     # ── Solo session methods ──────────────────────────────────────────────────
 

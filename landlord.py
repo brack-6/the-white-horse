@@ -11,7 +11,7 @@ Replaces bouncer.py. Key changes from v0.1:
 import os
 import httpx
 
-BRACKORACLE_URL = os.getenv("BRACKORACLE_URL", "http://localhost:3100")
+BRACKORACLE_URL = "http://localhost:3100"
 RISK_THRESHOLD  = os.getenv("RISK_THRESHOLD", "high")          # low | medium | high
 ALLOW_ON_ORACLE_DOWN = os.getenv("ALLOW_ON_ORACLE_DOWN", "false").lower() == "true"
 
@@ -29,7 +29,7 @@ class Landlord:
     async def check_prompt(self, prompt: str, agent_id: str) -> dict:
         """Screen incoming prompt before the pint is poured."""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
                     f"{BRACKORACLE_URL}/prompt-risk",
                     json={"content": prompt},
@@ -64,7 +64,7 @@ class Landlord:
     async def check_output(self, output: str, agent_id: str) -> dict:
         """Screen drunk output before returning to agent."""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
                     f"{BRACKORACLE_URL}/output-risk",
                     json={"content": output},

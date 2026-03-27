@@ -2,7 +2,7 @@
 The White Horse — v0.2
 """
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response, BackgroundTasks
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -14,6 +14,7 @@ import uvicorn
 from pint_engine import PintEngine
 from landlord import Landlord
 from sessions import SessionStore
+from steward import Steward
 
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="The White Horse", description="First round's on Jared.")
@@ -116,9 +117,112 @@ def agent_tab(agent_id: str):
 
 # ── Solo order ─────────────────────────────────────────────────────────────
 
+@app.get("/session/{session_id}")
+def get_session(session_id: str):
+    session = store.get_pending(session_id)
+    if session:
+        return session
+    return {"error": "session not found"}
+
+@app.get("/session/{session_id}/ideas")
+def get_session_ideas(session_id: str):
+    from steward import Steward
+    steward = Steward()
+    
+    # Use the same database as sessions
+    with store._connect() as conn:
+        rows = conn.execute("""
+            SELECT idea_text, relevance, novelty, feasibility, impact, selected, round
+            FROM ideas 
+            WHERE session_id = ? 
+            ORDER BY round DESC, (relevance * 0.4 + novelty * 0.2 + feasibility * 0.2 + impact * 0.2) DESC
+        """, (session_id,)).fetchall()
+    
+    ideas = []
+    for row in rows:
+        ideas.append({
+            "idea_text": row[0],
+            "relevance": row[1],
+            "novelty": row[2], 
+            "feasibility": row[3],
+            "impact": row[4],
+            "selected": bool(row[5]),
+            "round": row[6]
+        })
+    
+    return {
+        "session_id": session_id,
+        "ideas": ideas,
+        "total_ideas": len(ideas)
+    }
+
+async def _brew(session_id: str, req: OrderRequest, pint: dict, risk: dict):
+    result = await engine.serve(req.prompt, pint)
+    output_risk = await landlord.check_output(result["drunk_output"], req.agent_id)
+    if output_risk["blocked"]:
+        # Update session with refused status
+        store.update_pending(session_id, "", "", 0, "refused", "", None)
+        return
+    
+    store.update_pending(session_id, 
+        sober_output=result["sober_output"], 
+        drunk_output=result["drunk_output"],
+        tokens=result["tokens"], 
+        risk_score=risk.get("risk", "low"), 
+        model=result["model"])
+    
+    # Process ideas from agent output
+    steward = Steward()
+    session_goal = f"Process prompt: {req.prompt[:100]}..."
+    
+    # Extract and score ideas from the drunk output
+    idea_ids = steward.process_agent_output(
+        result["drunk_output"], 
+        session_id, 
+        req.agent_id, 
+        session_goal,
+        round_num=1
+    )
+    
+    # If ideas were selected, prepare for next round
+    if idea_ids:
+        selected_ideas = []
+        with store._connect() as conn:
+            for idea_id in idea_ids:
+                row = conn.execute("SELECT idea_text FROM ideas WHERE id = ?", (idea_id,)).fetchone()
+                if row:
+                    selected_ideas.append(row[0])
+        
+        if selected_ideas:
+            next_prompt = f"""Continue developing these ideas:
+{chr(10).join(f'{i+1}. {idea}' for i, idea in enumerate(selected_ideas))}
+
+What should we focus on next?"""
+            
+            # Store next round idea in database
+            with store._connect() as conn:
+                conn.execute("""
+                    INSERT INTO ideas 
+                    (id, session_id, agent_name, idea_text, reasoning, assumptions, next_step, 
+                     relevance, novelty, feasibility, impact, selected, round, score)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    f"{session_id}-round2", session_id, req.agent_id,
+                    "Continue idea development based on previous selections",
+                    "Building on selected ideas from round 1",
+                    "Previous ideas are valid and worth expanding",
+                    "Select top ideas and develop detailed implementation plans",
+                    0.7, 0.6, 0.8, 0.7, 0, 2, 0.7
+                ))
+                conn.commit()
+            
+            return {"session_id": session_id, "status": "ready", "selected_ideas": selected_ideas}
+    
+    return {"session_id": session_id, "status": "ready", "ideas_processed": len(idea_ids)}
+
 @app.post("/order")
 @limiter.limit("10/minute")
-async def order(request: Request, req: OrderRequest):
+async def order(request: Request, req: OrderRequest, background_tasks: BackgroundTasks):
     risk = await landlord.check_prompt(req.prompt, req.agent_id)
     if risk["blocked"]:
         return {"session_id": None, "status": "refused", "message": "Landlord refused service.", "reason": risk.get("reason")}
@@ -126,24 +230,10 @@ async def order(request: Request, req: OrderRequest):
     pint = engine.load_pint(req.pint)
     if not pint:
         raise HTTPException(status_code=404, detail=f"No pint called '{req.pint}' on the menu.")
-
-    result = await engine.serve(req.prompt, pint)
-
-    output_risk = await landlord.check_output(result["drunk_output"], req.agent_id)
-    if output_risk["blocked"]:
-        return {"session_id": None, "status": "refused", "message": "Landlord refused the output.", "reason": output_risk.get("reason")}
-
-    session_id = store.save(
-        agent_id=req.agent_id, pint=req.pint, prompt=req.prompt,
-        sober_output=result["sober_output"], drunk_output=result["drunk_output"],
-        tokens=result["tokens"], risk_score=risk.get("risk", "low"), model=result["model"]
-    )
-
-    return {
-        "session_id": session_id, "status": "served", "pint": pint["name"],
-        "sober_output": result["sober_output"], "drunk_output": result["drunk_output"],
-        "risk": risk.get("risk", "low"), "tokens": result["tokens"]
-    }
+    
+    session_id = store.create_pending(req.agent_id, req.pint, req.prompt)
+    background_tasks.add_task(_brew, session_id, req, pint, risk)
+    return {"session_id": session_id, "status": "brewing"}
 
 @app.post("/last-orders")
 def last_orders(req: LastOrdersRequest):
@@ -247,5 +337,7 @@ async def legacy_output_risk():
 async def legacy_tool_risk():
     return RedirectResponse(url="https://brack-hive.tail4f568d.ts.net/oracle/tool-risk", status_code=308)
 
+# Payments now handled by Node.js layer
+
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=3200, reload=True)
+    uvicorn.run("app:app", host="127.0.0.1", port=3200, reload=True, reload_dirs="/home/brack/white-horse")

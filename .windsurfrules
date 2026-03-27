@@ -1,0 +1,57 @@
+---
+trigger: always_on
+---
+
+# Brack / White Horse — Cascade Rules
+
+<project_context>
+- Hardware: Beelink N100 ("the hive") — low-resource, single-threaded Ollama
+- Services:
+  - brackoracle (Node, :3100) — safety oracle, SQLite logging
+  - white-horse-python (FastAPI, :3200) — agents, sessions, pints
+  - white-horse-node (Node proxy, :3201) — x402 payment gate
+- Process manager: PM2
+- Local LLM: Ollama — ALLOWED: gemma3, phi4, qwen2.5 | FORBIDDEN: M2.5 Lightning (will not run on N100)
+- Database: SQLite at ~/brackoracle/oracle.db and ~/white-horse/sessions.db
+- Networking: Tailscale Funnel for public access, UFW blocks everything else
+- Repos: ~/brackoracle, ~/white-horse
+</project_context>
+
+<working_style>
+- Before editing any file, read it first with @Files
+- Check PM2 service status with @Terminal before touching a service
+- After every fix, run a curl test and show actual JSON output — never describe what it "should" say
+- If a terminal command hangs more than 5 seconds, kill it and use a non-blocking alternative
+- One fix, one verify, then stop and report — do not opportunistically refactor other things
+- If a file path is unknown, grep or find before asking the user
+- Present a diff and wait for approval before applying large changes
+- Run tests sequentially — never parallel on this hardware
+</working_style>
+
+<architecture_rules>
+- Internal localhost calls MUST bypass x402 payment checks — never require payment headers for service-to-service calls
+- landlord.py calls BrackOracle at http://localhost:3100 — changes to either side require checking both files
+- PM2 process names: brack-watcher, brackoracle, white-horse-node, white-horse-python
+- No npm install or pip install without explicit user confirmation
+- Do not add new services or ports without asking
+- Sessions are async: POST /order returns session_id immediately, result is polled via GET /session/{id}
+</architecture_rules>
+
+<useful_patterns>
+- Check sessions DB schema before writing queries: sqlite3 ~/white-horse/sessions.db ".schema"
+- Tail logs for a service: pm2 logs white-horse-python --lines 20
+- Test BrackOracle directly: curl -X POST http://localhost:3100/prompt-risk -H "Content-Type: application/json" -d '{"content": "test"}'
+- Test order flow: curl -X POST http://localhost:3200/order -H "Content-Type: application/json" -d '{"prompt": "test", "agent_id": "test", "pint": "default"}'
+</useful_patterns>
+
+
+<standard_operating_procedures>
+- **Short Commits**: Always generate commit messages using the `type(scope): description` format (e.g., `feat(oracle): add session validation`). Keep descriptions under 50 characters.
+- **Clean Code Constraints**: Prioritize early returns to reduce nesting. Use descriptive variable names that reflect the domain (e.g., `paymentStatus` instead of `status`).
+- **The "Test-First" Verify**: Before declaring a task "done," Cascade must generate a `curl` or `pytest` command to verify the specific endpoint changed.
+</standard_operating_procedures>
+
+<error_handling>
+- **Problems Panel Awareness**: After every file save, Cascade should check the 'Problems' panel. If new linting or type errors appear, they must be fixed before proceeding to the next task.
+- **Silent Failures**: If a service like `white-horse-node` fails to restart in PM2, check `pm2 logs` automatically before asking the user for help.
+</error_handling>

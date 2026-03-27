@@ -140,9 +140,24 @@ class PintEngine:
         }
 
         async with httpx.AsyncClient(timeout=240.0) as client:
-            resp = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+            try:
+                resp = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+            except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout) as e:
+                print(f"[PINT_ENGINE] Ollama timeout: {e}")
+                # Return graceful fallback response
+                return {
+                    "text": "I apologize, but I'm experiencing connection issues. Please try again later.",
+                    "tokens": 0
+                }
+            except Exception as e:
+                print(f"[PINT_ENGINE] Ollama error: {e}")
+                # Return graceful fallback response for other errors
+                return {
+                    "text": "I apologize, but I'm experiencing technical difficulties. Please try again later.",
+                    "tokens": 0
+                }
 
         text   = data.get("message", {}).get("content", "")
         tokens = data.get("eval_count", 0) + data.get("prompt_eval_count", 0)

@@ -18,6 +18,20 @@ before the model call. The sober and drunk outputs are both returned and logged.
 
 ---
 
+## Architecture
+
+The White Horse now uses a hybrid architecture:
+
+- **Node.js Proxy** (port 3201): Handles x402 payments and rate limiting
+- **Python FastAPI** (port 3200): Core pub functionality and AI interactions
+- **x402 Integration**: Coinbase's x402-express@1.1.0 and @coinbase/x402 for payments
+
+```
+Client → Node.js Proxy (x402 payments) → Python FastAPI → Ollama
+```
+
+---
+
 ## Install
 
 ```bash
@@ -38,8 +52,19 @@ mkdir -p logs
 ## Run (dev)
 
 ```bash
+# Install Node.js dependencies
+npm install
+
+# Start both Python backend and Node.js proxy
+npm start
+
+# Or start individually:
+# Terminal 1: Python backend
 source venv/bin/activate
 python app.py
+
+# Terminal 2: Node.js proxy with payments
+node server.js
 ```
 
 ---
@@ -47,11 +72,13 @@ python app.py
 ## Run (production)
 
 ```bash
-sudo cp whitehorse.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable whitehorse
-sudo systemctl start whitehorse
-sudo systemctl status whitehorse
+# Install dependencies
+npm install
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Start services
+npm start
 ```
 
 ---
